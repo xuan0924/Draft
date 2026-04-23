@@ -1,407 +1,327 @@
 <template>
-  <view class="page" :class="{ 'is-editor-open': expandedKey }">
-    <view class="calendar-wrap">
-      <view class="week-row">
-        <text v-for="w in weekLabels" :key="w" class="week-cell">{{ w }}</text>
-      </view>
+  <view class="desk-page">
+    <view class="desk-scene">
+      <view class="desk-calendar">
+        <view class="ring-row">
+          <view v-for="n in 8" :key="n" class="ring" />
+        </view>
 
-      <view class="month-grid">
-        <view
-          v-for="cell in paddedCells"
-          :key="cell.key"
-          class="day-cell"
-          :class="{ 'is-empty': cell.type === 'pad', 'has-entry': cell.entry }"
-          :id="'day-' + cell.key"
-          @tap="cell.type === 'day' && onDayTap(cell)"
-        >
-          <template v-if="cell.type === 'day'">
-            <text class="day-num">{{ cell.day }}</text>
-
-            <view v-if="cell.entry" class="polaroid">
+        <view class="calendar-paper-stack">
+          <view class="paper current" :class="{ 'is-flipping': isFlipping }">
+            <view class="paper-face front">
               <image
-                v-if="cell.entry.images[0]"
-                class="polaroid-img"
-                :src="cell.entry.images[0]"
+                v-if="currentEntry.images[0]"
+                class="bg-thumb"
+                :src="currentEntry.images[0]"
                 mode="aspectFill"
               />
-              <view class="polaroid-text">
-                <text class="line">{{ cell.entry.previewLines[0] || '' }}</text>
-                <text class="line">{{ cell.entry.previewLines[1] || '' }}</text>
+              <view class="paper-content">
+                <text class="date-number">{{ currentDay }}</text>
+                <text class="date-line">{{ currentDateLabel }}</text>
+                <text class="essay">{{ currentEntry.text || '今天写点什么吧。' }}</text>
+              </view>
+              <view class="summary-chip">
+                <text class="chip-label">AI Summary</text>
               </view>
             </view>
-          </template>
-        </view>
-      </view>
-    </view>
 
-    <view class="backdrop" :class="{ 'is-dim': expandedKey }" />
+            <view class="paper-face back">
+              <view class="paper-content ghost">
+                <text class="date-number">{{ currentDay }}</text>
+              </view>
+            </view>
+          </view>
 
-    <view
-      v-if="expandedCell"
-      class="editor-layer"
-      :class="{ 'is-expanded': editorExpanded }"
-      :style="layerStyle"
-    >
-      <view class="editor-inner">
-        <view class="editor-head">
-          <text class="back" @tap.stop="closeEditor">返回</text>
-          <text class="big-date">{{ expandedCell.dateLabel }}</text>
-        </view>
-
-        <textarea
-          class="note-input"
-          :value="expandedCell.entry?.text"
-          placeholder="写点什么…"
-          placeholder-style="color: rgba(0,0,0,0.35)"
-          @input="onNoteInput"
-        />
-
-        <view class="editor-foot">
-          <scroll-view scroll-x class="thumb-row" :show-scrollbar="false">
-            <image
-              v-for="(src, i) in expandedCell.entry?.images || []"
-              :key="i"
-              class="thumb"
-              :src="src"
-              mode="aspectFill"
-            />
-          </scroll-view>
-          <view class="ai-card">
-            <text class="ai-title">AI 总结</text>
-            <text class="ai-body">{{ expandedCell.entry?.aiSummary || '暂无总结' }}</text>
+          <view class="paper next">
+            <view class="paper-face front">
+              <image
+                v-if="nextEntry.images[0]"
+                class="bg-thumb"
+                :src="nextEntry.images[0]"
+                mode="aspectFill"
+              />
+              <view class="paper-content">
+                <text class="date-number">{{ nextDay }}</text>
+                <text class="date-line">{{ nextDateLabel }}</text>
+                <text class="essay">{{ nextEntry.text || '下一页已准备好。' }}</text>
+              </view>
+              <view class="summary-chip">
+                <text class="chip-label">AI Summary</text>
+              </view>
+            </view>
           </view>
         </view>
+
+        <view class="desk-base" />
+      </view>
+
+      <view class="action-row">
+        <button class="flip-btn" :disabled="isFlipping" @tap="flipPrev">上一天</button>
+        <button class="flip-btn" :disabled="isFlipping" @tap="flipNext">下一天</button>
       </view>
     </view>
   </view>
 </template>
 
 <script setup>
-import { reactive, computed, ref, nextTick } from 'vue'
+import { computed, reactive, ref } from 'vue'
 
-const ANIM_MS = 320
+const FLIP_MS = 760
 
 const state = reactive({
   year: 2026,
   month: 4,
+  day: 23,
   entries: {
     '2026-04-23': {
-      text: '第一行\n第二行会有预览',
+      text: '今天把随笔应用改造成拟物的立台日历，翻页更有仪式感。',
       images: [],
-      previewLines: [],
-      aiSummary: '今日要点摘录 …'
+      aiSummary: '以 3D 透视和顶部轴翻页重构主界面。'
+    },
+    '2026-04-24': {
+      text: '翻页动画完成后再更新日期数据，避免内容在动画中突变。',
+      images: [],
+      aiSummary: '用 isFlipping 锁定交互，提升稳定性。'
     }
   }
 })
 
-const weekLabels = ['日', '一', '二', '三', '四', '五', '六']
-
-function splitPreview(text = '') {
-  const lines = text.replace(/\r/g, '').split('\n').filter(Boolean)
-  return [lines[0] || '', lines[1] || '']
-}
-
-function hydrateEntries() {
-  Object.keys(state.entries).forEach((k) => {
-    const e = state.entries[k]
-    e.previewLines = splitPreview(e.text)
-  })
-}
-hydrateEntries()
+const isFlipping = ref(false)
+const pendingDay = ref(null)
 
 const daysInMonth = computed(() => new Date(state.year, state.month, 0).getDate())
 
-const startWeekday = computed(() => new Date(state.year, state.month - 1, 1).getDay())
-
-const paddedCells = computed(() => {
-  const cells = []
-  const { year, month } = state
-  const pad = startWeekday.value
-  for (let i = 0; i < pad; i++) {
-    cells.push({ type: 'pad', key: `pad-${i}` })
-  }
-  for (let d = 1; d <= daysInMonth.value; d++) {
-    const key = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`
-    cells.push({
-      type: 'day',
-      key,
-      day: d,
-      dateLabel: `${month}月${d}日`,
-      entry: state.entries[key] || null
-    })
-  }
-  return cells
-})
-
-const expandedKey = ref('')
-const expandedCell = computed(() =>
-  paddedCells.value.find((c) => c.key === expandedKey.value && c.type === 'day')
-)
-
-const editorExpanded = ref(false)
-const layerStyle = ref({})
-
-let lastRect = null
-
-function getViewportSize() {
-  const sys = uni.getSystemInfoSync()
-  return { vw: sys.windowWidth, vh: sys.windowHeight }
+function dateKey(day) {
+  return `${state.year}-${String(state.month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }
 
-/**
- * 格子 rect → 全屏 layer 的初始 transform（中心对齐 + 等比缩放到格子大小）
- */
-function flipToFullscreen(rect) {
-  const { vw, vh } = getViewportSize()
-  const cx = rect.left + rect.width / 2
-  const cy = rect.top + rect.height / 2
-  const vx = vw / 2
-  const vy = vh / 2
-  const sx = rect.width / vw
-  const sy = rect.height / vh
-  return {
-    transform: `translate(${cx - vx}px, ${cy - vy}px) scale(${sx}, ${sy})`,
-    opacity: '1'
-  }
-}
-
-async function onDayTap(cell) {
-  expandedKey.value = cell.key
-  editorExpanded.value = false
-
-  await nextTick()
-
-  const applyFlip = (rect) => {
-    lastRect = rect
-    layerStyle.value = flipToFullscreen(rect)
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        editorExpanded.value = true
-        layerStyle.value = {
-          transform: 'translate(0px, 0px) scale(1, 1)',
-          opacity: '1'
-        }
-      })
-    })
-  }
-
-  uni.createSelectorQuery()
-    .select(`#day-${cell.key}`)
-    .boundingClientRect((rect) => {
-      if (rect && rect.width) {
-        applyFlip(rect)
-        return
-      }
-      setTimeout(() => {
-        uni.createSelectorQuery()
-          .select(`#day-${cell.key}`)
-          .boundingClientRect((r2) => {
-            if (r2 && r2.width) applyFlip(r2)
-          })
-          .exec()
-      }, 50)
-    })
-    .exec()
-}
-
-function closeEditor() {
-  if (!lastRect) {
-    expandedKey.value = ''
-    layerStyle.value = {}
-    return
-  }
-  editorExpanded.value = false
-  layerStyle.value = flipToFullscreen(lastRect)
-  setTimeout(() => {
-    expandedKey.value = ''
-    layerStyle.value = {}
-    lastRect = null
-  }, ANIM_MS)
-}
-
-function onNoteInput(e) {
-  const key = expandedKey.value
-  if (!state.entries[key]) {
-    state.entries[key] = {
+function getEntry(day) {
+  return (
+    state.entries[dateKey(day)] || {
       text: '',
       images: [],
-      previewLines: ['', ''],
       aiSummary: ''
     }
-  }
-  state.entries[key].text = e.detail.value
-  state.entries[key].previewLines = splitPreview(e.detail.value)
+  )
+}
+
+const currentDay = computed(() => state.day)
+const currentDateLabel = computed(() => `${state.year}.${String(state.month).padStart(2, '0')}.${String(state.day).padStart(2, '0')}`)
+const currentEntry = computed(() => getEntry(state.day))
+
+const nextDay = computed(() => {
+  if (pendingDay.value !== null) return pendingDay.value
+  const d = state.day + 1
+  return d > daysInMonth.value ? 1 : d
+})
+const nextDateLabel = computed(() => `${state.year}.${String(state.month).padStart(2, '0')}.${String(nextDay.value).padStart(2, '0')}`)
+const nextEntry = computed(() => getEntry(nextDay.value))
+
+function runFlip(targetDay) {
+  if (isFlipping.value) return
+  pendingDay.value = targetDay
+  isFlipping.value = true
+  setTimeout(() => {
+    state.day = targetDay
+    isFlipping.value = false
+    pendingDay.value = null
+  }, FLIP_MS)
+}
+
+function flipNext() {
+  const d = state.day + 1
+  runFlip(d > daysInMonth.value ? 1 : d)
+}
+
+function flipPrev() {
+  const d = state.day - 1
+  runFlip(d < 1 ? daysInMonth.value : d)
 }
 </script>
 
 <style scoped lang="scss">
-.page {
+.desk-page {
   min-height: 100vh;
-  position: relative;
-  background: #fff;
+  padding: 40rpx 24rpx 56rpx;
+  background: radial-gradient(circle at 20% 15%, #f9fafc 0%, #e6eaef 55%, #d8dce1 100%);
 }
 
-.calendar-wrap {
-  padding: 24rpx;
-  transition: opacity 0.35s ease;
-}
-
-.page.is-editor-open .calendar-wrap {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.week-row,
-.month-grid {
-  display: flex;
-  flex-wrap: wrap;
-}
-
-.week-cell,
-.day-cell {
-  width: 14.2857%;
-  box-sizing: border-box;
-}
-
-.week-cell {
-  text-align: center;
-  font-size: 22rpx;
-  color: #888;
-  padding: 8rpx 0;
-}
-
-.day-cell {
-  aspect-ratio: 3 / 4;
-  border: 1px solid #eee;
-  padding: 8rpx;
-  display: flex;
-  flex-direction: column;
-  gap: 6rpx;
-}
-
-.day-cell.is-empty {
-  border-color: transparent;
-}
-
-.day-num {
-  font-size: 22rpx;
-  color: #333;
-}
-
-.polaroid {
-  flex: 1;
-  background: #faf7f2;
-  border-radius: 10rpx;
-  box-shadow: 0 6rpx 16rpx rgba(0, 0, 0, 0.08);
-  padding: 8rpx;
-  overflow: hidden;
-}
-
-.polaroid-img {
+.desk-scene {
   width: 100%;
-  height: 72rpx;
-  border-radius: 6rpx;
+  max-width: 720rpx;
+  margin: 0 auto;
+  perspective: 1800rpx;
+  perspective-origin: center 30%;
 }
 
-.polaroid-text .line {
-  display: block;
-  font-size: 18rpx;
-  color: #444;
-  line-height: 1.35;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+.desk-calendar {
+  transform-style: preserve-3d;
 }
 
-.backdrop {
-  pointer-events: none;
-  transition: opacity 0.35s ease;
+.ring-row {
+  display: flex;
+  justify-content: center;
+  gap: 18rpx;
+  margin-bottom: -12rpx;
+  position: relative;
+  z-index: 4;
 }
 
-.backdrop.is-dim {
-  opacity: 0;
+.ring {
+  width: 18rpx;
+  height: 18rpx;
+  border-radius: 50%;
+  border: 3rpx solid #8a8f98;
+  background: linear-gradient(145deg, #dbdee4, #9da3ad);
+  box-shadow: inset 0 2rpx 3rpx rgba(255, 255, 255, 0.55), 0 2rpx 4rpx rgba(0, 0, 0, 0.22);
 }
 
-.editor-layer {
-  position: fixed;
+.calendar-paper-stack {
+  position: relative;
+  height: 880rpx;
+  transform-style: preserve-3d;
+}
+
+.paper {
+  position: absolute;
   left: 0;
   top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 999;
-  background: rgba(255, 255, 255, 0.92);
-  transform-origin: center center;
-  will-change: transform, opacity;
-  transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1), opacity 320ms ease;
+  width: 100%;
+  height: 100%;
+  border-radius: 18rpx;
+  transform-style: preserve-3d;
 }
 
-.editor-inner {
+.paper-face {
+  position: absolute;
+  inset: 0;
+  border-radius: 18rpx;
+  overflow: hidden;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  background: linear-gradient(180deg, #fbfcfd 0%, #f5f6f8 100%);
+}
+
+.paper.current {
+  z-index: 3;
+  transform-origin: top center;
+  transition: transform 760ms cubic-bezier(0.2, 0.72, 0.2, 1), opacity 760ms ease;
+  box-shadow: 0 24rpx 38rpx rgba(0, 0, 0, 0.18), 0 6rpx 12rpx rgba(0, 0, 0, 0.12);
+}
+
+.paper.current.is-flipping {
+  transform: rotateX(-180deg);
+  opacity: 0.22;
+}
+
+.paper.current .back {
+  transform: rotateX(180deg);
+  background: linear-gradient(180deg, #eceff3 0%, #dde2e9 100%);
+}
+
+.paper.next {
+  z-index: 1;
+  transform: translateZ(-6rpx) translateY(8rpx) scale(0.992);
+  box-shadow: 0 14rpx 24rpx rgba(0, 0, 0, 0.12);
+}
+
+.bg-thumb {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.15;
+}
+
+.paper-content {
+  position: relative;
+  z-index: 2;
   height: 100%;
   display: flex;
   flex-direction: column;
-  padding: calc(env(safe-area-inset-top) + 24rpx) 24rpx calc(env(safe-area-inset-bottom) + 24rpx);
+  padding: 84rpx 56rpx 120rpx;
   box-sizing: border-box;
 }
 
-.editor-head {
-  margin-bottom: 16rpx;
+.paper-content.ghost {
+  align-items: center;
+  justify-content: center;
+  opacity: 0.35;
 }
 
-.back {
-  font-size: 28rpx;
-  color: #007aff;
+.date-number {
+  font-size: 168rpx;
+  line-height: 1;
+  font-weight: 800;
+  color: #1f242c;
+  letter-spacing: 3rpx;
 }
 
-.big-date {
-  display: block;
+.date-line {
   margin-top: 12rpx;
-  font-size: 44rpx;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-size: 28rpx;
+  color: #667081;
 }
 
-.note-input {
-  flex: 1;
-  width: 100%;
-  min-height: 200rpx;
-  background: transparent;
-  font-size: 30rpx;
-  line-height: 1.6;
+.essay {
+  margin-top: 46rpx;
+  font-size: 34rpx;
+  line-height: 1.7;
+  color: #2e3440;
+  white-space: pre-wrap;
 }
 
-.editor-foot {
-  margin-top: 16rpx;
-}
-
-.thumb-row {
-  white-space: nowrap;
-  margin-bottom: 12rpx;
-}
-
-.thumb {
-  width: 120rpx;
-  height: 120rpx;
+.summary-chip {
+  position: absolute;
+  left: 56rpx;
+  right: 56rpx;
+  bottom: 38rpx;
+  height: 70rpx;
   border-radius: 12rpx;
-  margin-right: 12rpx;
-  display: inline-block;
-  vertical-align: top;
+  background: linear-gradient(90deg, rgba(33, 38, 48, 0.94), rgba(61, 69, 84, 0.94));
+  display: flex;
+  align-items: center;
+  padding: 0 22rpx;
+  box-sizing: border-box;
 }
 
-.ai-card {
-  background: #f6f7fb;
-  border-radius: 16rpx;
-  padding: 16rpx;
-}
-
-.ai-title {
+.chip-label {
+  color: #f4f6fa;
   font-size: 24rpx;
-  color: #666;
+  letter-spacing: 1rpx;
 }
 
-.ai-body {
-  display: block;
-  margin-top: 8rpx;
-  font-size: 26rpx;
-  color: #222;
+.desk-base {
+  margin: 20rpx auto 0;
+  width: 90%;
+  height: 84rpx;
+  border-radius: 20rpx;
+  background: linear-gradient(135deg, #6f5038 0%, #8a684b 28%, #4f3828 100%);
+  box-shadow: inset 0 6rpx 10rpx rgba(255, 255, 255, 0.22), inset 0 -8rpx 14rpx rgba(0, 0, 0, 0.28),
+    0 18rpx 26rpx rgba(0, 0, 0, 0.25);
+  transform: translateZ(-22rpx) rotateX(68deg);
+  transform-origin: top;
+}
+
+.action-row {
+  margin-top: 40rpx;
+  display: flex;
+  justify-content: center;
+  gap: 24rpx;
+}
+
+.flip-btn {
+  width: 220rpx;
+  height: 78rpx;
+  line-height: 78rpx;
+  border: none;
+  border-radius: 40rpx;
+  color: #fff;
+  background: linear-gradient(135deg, #4a5568, #2d3748);
+  font-size: 28rpx;
+}
+
+.flip-btn[disabled] {
+  opacity: 0.45;
 }
 </style>

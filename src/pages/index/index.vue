@@ -1,67 +1,100 @@
 <template>
   <view class="jot-page">
-    <view class="jot-scene">
-      <view class="jot-rings">
-        <view v-for="n in 8" :key="n" class="jot-ring" />
+    <view class="jot-header-glass">
+      <view class="jot-header-inner">
+        <view class="jot-header-left">
+          <view class="jot-month-nav" @click="changeMonth(-1)">
+            <text class="jot-month-nav-icon">‹</text>
+          </view>
+          <text class="jot-month-title">{{ monthName }}</text>
+          <view class="jot-month-nav" @click="changeMonth(1)">
+            <text class="jot-month-nav-icon">›</text>
+          </view>
+        </view>
+        <view class="jot-header-right">
+          <view class="jot-year-btn" @click="changeYear(-1)">
+            <text class="jot-year-icon">↑</text>
+          </view>
+          <text class="jot-year-label">{{ state.year }}</text>
+          <view class="jot-year-btn" @click="changeYear(1)">
+            <text class="jot-year-icon">↓</text>
+          </view>
+        </view>
       </view>
+    </view>
 
-      <view
-        class="jot-stage"
-        :class="{ 'is-transitioning': animState !== 'drag' }"
-        :style="stageStyle"
-        @touchstart="onTouchStart"
-        @touchmove="onTouchMove"
-        @touchend="onTouchEnd"
-      >
-        <view class="jot-page-next">
-          <view class="jot-half jot-half--top">
-            <text class="jot-day">{{ incomingDay }}</text>
+    <view class="jot-calendar">
+      <view class="jot-week-row">
+        <text v-for="w in weekdayLabels" :key="w" class="jot-week-cell">{{ w }}</text>
+      </view>
+      <view class="jot-day-grid">
+        <view
+          v-for="(cell, idx) in calendarCells"
+          :key="'c-' + idx"
+          class="jot-day-slot"
+          @click="onCellClick(cell)"
+        >
+          <view v-if="cell.day" class="jot-day-cell">
+            <view
+              class="jot-day-num-wrap"
+              :class="{ 'is-selected': cell.day === state.day }"
+            >
+              <text class="jot-day-num" :class="{ 'is-selected': cell.day === state.day }">
+                {{ cell.day }}
+              </text>
+            </view>
+            <view v-if="hasRecord(cell.day)" class="jot-day-dot" />
           </view>
-          <view class="jot-half jot-half--bottom">
-            <text class="jot-date">{{ incomingLabel }}</text>
-            <text class="jot-text">{{ incomingEntry.text || '下一页准备完成。' }}</text>
-            <view class="jot-summary">AI Summary</view>
-          </view>
+        </view>
+      </view>
+    </view>
+
+    <scroll-view class="jot-list-scroll" scroll-y :show-scrollbar="false">
+      <view class="jot-list-anim" :animation="listAnim">
+        <view v-if="currentEntry.text || currentEntry.aiSummary || (currentEntry.images && currentEntry.images.length)" class="jot-card">
+          <text class="jot-card-date">{{ currentLabel }}</text>
+          <text class="jot-card-body">{{ currentEntry.text || '（无正文）' }}</text>
         </view>
 
         <view
-          class="jot-flip"
-          :class="{
-            'is-commit': animState === 'commit',
-            'is-rebound': animState === 'rebound'
-          }"
-          :style="flipStyle"
+          v-if="currentEntry.aiSummary"
+          class="jot-ai-sheet"
         >
-          <view class="jot-half jot-half--top jot-fold-shell" :style="upperStyle">
-            <view class="jot-half-face front">
-              <image v-if="currentEntry.images[0]" class="jot-bg" :src="currentEntry.images[0]" mode="aspectFill" />
-              <text class="jot-day">{{ currentDay }}</text>
-            </view>
-            <view class="jot-half-face back">
-              <text class="jot-day mirror">{{ currentDay }}</text>
-            </view>
-          </view>
+          <text class="jot-ai-title">AI 摘要</text>
+          <text class="jot-ai-body">{{ currentEntry.aiSummary }}</text>
+        </view>
 
-          <view class="jot-half jot-half--bottom">
-            <image v-if="currentEntry.images[0]" class="jot-bg" :src="currentEntry.images[0]" mode="aspectFill" />
-            <text class="jot-date">{{ currentLabel }}</text>
-            <text class="jot-text">{{ currentEntry.text || '今天写点什么吧。' }}</text>
-            <view class="jot-summary">AI Summary</view>
-          </view>
+        <view
+          v-if="!currentEntry.text && !currentEntry.aiSummary && !(currentEntry.images && currentEntry.images.length)"
+          class="jot-card jot-card--empty"
+        >
+          <text class="jot-empty-text">这一天还没有随笔</text>
         </view>
       </view>
-
-      <view class="jot-base" />
-    </view>
+      <view class="jot-list-bottom-space" />
+    </scroll-view>
   </view>
 </template>
 
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 
-const FLIP_MS = 760
-const COMMIT_THRESHOLD = 90
-const DRAG_MAX = 240
+const weekdayLabels = ['日', '一', '二', '三', '四', '五', '六']
+
+const MONTH_NAMES = [
+  '一月',
+  '二月',
+  '三月',
+  '四月',
+  '五月',
+  '六月',
+  '七月',
+  '八月',
+  '九月',
+  '十月',
+  '十一月',
+  '十二月'
+]
 
 const state = reactive({
   year: 2026,
@@ -81,14 +114,12 @@ const state = reactive({
   }
 })
 
-const animState = ref('idle') // idle | drag | commit | rebound
-const touchStartY = ref(0)
-const dragDeltaY = ref(0)
-const angleX = ref(0)
-const incomingDayRef = ref(0)
-const targetAngle = ref(-180)
+const listAnim = ref({})
+const skipListAnim = ref(true)
 
 const daysInMonth = computed(() => new Date(state.year, state.month, 0).getDate())
+
+const monthName = computed(() => MONTH_NAMES[state.month - 1] || '')
 
 function dateKey(day) {
   return `${state.year}-${String(state.month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
@@ -104,321 +135,324 @@ function getEntry(day) {
   )
 }
 
-function normalizeDay(day) {
-  if (day < 1) return daysInMonth.value
-  if (day > daysInMonth.value) return 1
-  return day
+function hasRecord(day) {
+  const e = getEntry(day)
+  return !!(e.text || e.aiSummary || (e.images && e.images.length))
 }
 
-function getTouchY(e) {
-  const touch = e.changedTouches?.[0] || e.touches?.[0]
-  return touch?.pageY ?? touch?.clientY ?? 0
-}
+const firstWeekday = computed(() => new Date(state.year, state.month - 1, 1).getDay())
 
-const progress = computed(() => Math.min(Math.abs(angleX.value) / 180, 1))
-const bendY = computed(() => progress.value < 0.5 ? progress.value * 2 : (1 - progress.value) * 2)
+const calendarCells = computed(() => {
+  const dim = daysInMonth.value
+  const pad = firstWeekday.value
+  const list = []
+  for (let i = 0; i < pad; i++) list.push({ day: 0 })
+  for (let d = 1; d <= dim; d++) list.push({ day: d })
+  return list
+})
 
-const currentDay = computed(() => state.day)
+const currentEntry = computed(() => getEntry(state.day))
+
 const currentLabel = computed(
   () => `${state.year}.${String(state.month).padStart(2, '0')}.${String(state.day).padStart(2, '0')}`
 )
-const currentEntry = computed(() => getEntry(state.day))
 
-const incomingDay = computed(() => {
-  if (!incomingDayRef.value) {
-    return normalizeDay(state.day + 1)
-  }
-  return incomingDayRef.value
-})
-const incomingLabel = computed(
-  () => `${state.year}.${String(state.month).padStart(2, '0')}.${String(incomingDay.value).padStart(2, '0')}`
-)
-const incomingEntry = computed(() => getEntry(incomingDay.value))
+function clampDayToMonth() {
+  const dim = daysInMonth.value
+  if (state.day > dim) state.day = dim
+  if (state.day < 1) state.day = 1
+}
 
-const stageStyle = computed(() => ({
-  '--flip-progress': progress.value.toFixed(3),
-  '--flip-angle': `${angleX.value.toFixed(2)}deg`,
-  '--target-angle': `${targetAngle.value}deg`
-}))
-
-const flipStyle = computed(() => ({
-  transform: `rotateX(${angleX.value}deg)`
-}))
-
-const upperStyle = computed(() => {
-  const skew = bendY.value * 5
-  const scale = 1 + bendY.value * 0.04
-  return {
-    transform: `perspective(1600rpx) rotateX(${Math.sign(angleX.value || -1) * bendY.value * -18}deg) skewY(${skew}deg) scaleY(${scale})`
-  }
+watch([() => state.year, () => state.month], () => {
+  clampDayToMonth()
 })
 
-function commitFlip(targetDay, sign) {
-  animState.value = 'commit'
-  incomingDayRef.value = targetDay
-  targetAngle.value = sign * 180
-  angleX.value = sign * -180
-  setTimeout(() => {
-    state.day = targetDay
-    animState.value = 'idle'
-    angleX.value = 0
-    dragDeltaY.value = 0
-    incomingDayRef.value = 0
-  }, FLIP_MS)
+function playListEnter() {
+  const anim = uni.createAnimation({
+    duration: 300,
+    timingFunction: 'cubic-bezier(0.25, 0.1, 0.25, 1)'
+  })
+  anim.opacity(0).translateY(36).step({ duration: 20 })
+  anim.opacity(1).translateY(0).step({ duration: 280 })
+  listAnim.value = anim.export()
 }
 
-function reboundFlip() {
-  animState.value = 'rebound'
-  angleX.value = 0
-  dragDeltaY.value = 0
-  setTimeout(() => {
-    animState.value = 'idle'
-    incomingDayRef.value = 0
-    targetAngle.value = -180
-  }, FLIP_MS - 120)
+function selectDay(day) {
+  if (!day || day === state.day) return
+  state.day = day
+  if (skipListAnim.value) return
+  playListEnter()
 }
 
-function onTouchStart(e) {
-  if (animState.value === 'commit') return
-  animState.value = 'drag'
-  touchStartY.value = getTouchY(e)
-  dragDeltaY.value = 0
-  incomingDayRef.value = normalizeDay(state.day + 1)
-}
-
-function onTouchMove(e) {
-  if (animState.value !== 'drag') return
-  const y = getTouchY(e)
-  const delta = y - touchStartY.value
-  dragDeltaY.value = delta
-
-  const clamped = Math.max(-DRAG_MAX, Math.min(DRAG_MAX, delta))
-  const ratio = clamped / DRAG_MAX
-  angleX.value = Math.max(-170, Math.min(85, ratio * 180))
-
-  incomingDayRef.value = clamped <= 0 ? normalizeDay(state.day + 1) : normalizeDay(state.day - 1)
-}
-
-function onTouchEnd() {
-  if (animState.value !== 'drag') return
-
-  const absDelta = Math.abs(dragDeltaY.value)
-  const isPrev = dragDeltaY.value > 0
-  const targetDay = isPrev ? normalizeDay(state.day - 1) : normalizeDay(state.day + 1)
-
-  if (absDelta >= COMMIT_THRESHOLD) {
-    const sign = isPrev ? 1 : -1
-    commitFlip(targetDay, sign)
-    return
+function changeMonth(delta) {
+  let m = state.month + delta
+  let y = state.year
+  if (m < 1) {
+    m = 12
+    y -= 1
+  } else if (m > 12) {
+    m = 1
+    y += 1
   }
-  reboundFlip()
+  state.year = y
+  state.month = m
+  clampDayToMonth()
 }
+
+function changeYear(delta) {
+  state.year += delta
+  clampDayToMonth()
+}
+
+function onCellClick(cell) {
+  if (!cell.day) return
+  selectDay(cell.day)
+}
+
+onMounted(() => {
+  nextTick(() => {
+    skipListAnim.value = false
+  })
+})
 </script>
 
 <style scoped lang="scss">
 .jot-page {
   min-height: 100vh;
-  padding: 40rpx 22rpx 60rpx;
-  background: radial-gradient(circle at 18% 12%, #f8fafc 0%, #e8ecf1 56%, #d9dde3 100%);
-}
-
-.jot-scene {
-  width: 100%;
-  max-width: 720rpx;
-  margin: 0 auto;
-  perspective: 1800rpx;
-  perspective-origin: center 26%;
-}
-
-.jot-rings {
+  height: 100vh;
   display: flex;
+  flex-direction: column;
+  padding-bottom: env(safe-area-inset-bottom);
+  background: #f2f2f7;
+  box-sizing: border-box;
+}
+
+.jot-header-glass {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  padding-top: calc(env(safe-area-inset-top) + 12rpx);
+  padding-bottom: 16rpx;
+  background: rgba(242, 242, 247, 0.72);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  border-bottom: 1rpx solid rgba(60, 60, 67, 0.12);
+}
+
+.jot-header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 28rpx 0 24rpx;
+}
+
+.jot-header-left {
+  display: flex;
+  align-items: center;
+  gap: 4rpx;
+}
+
+.jot-month-nav {
+  width: 56rpx;
+  height: 56rpx;
+  display: flex;
+  align-items: center;
   justify-content: center;
-  gap: 18rpx;
-  margin-bottom: -14rpx;
-  position: relative;
-  z-index: 5;
-}
-
-.jot-ring {
-  width: 18rpx;
-  height: 18rpx;
   border-radius: 50%;
-  border: 3rpx solid #8c929b;
-  background: linear-gradient(140deg, #dfe3e8 0%, #9ca3ae 100%);
-  box-shadow: inset 0 2rpx 4rpx rgba(255, 255, 255, 0.6), 0 2rpx 4rpx rgba(0, 0, 0, 0.2);
 }
 
-.jot-stage {
-  position: relative;
-  height: 860rpx;
-  transform-style: preserve-3d;
-  will-change: transform;
-}
-
-.jot-stage::after {
-  content: '';
-  position: absolute;
-  left: 6%;
-  right: 6%;
-  bottom: 6rpx;
-  height: 90rpx;
-  pointer-events: none;
-  background: radial-gradient(
-    ellipse at center,
-    rgba(20, 26, 35, calc(0.12 + var(--flip-progress) * 0.34)) 0%,
-    rgba(20, 26, 35, 0) 72%
-  );
-  transform: translateZ(-24rpx) scaleY(calc(1 + var(--flip-progress) * 0.25));
-}
-
-.jot-page-next,
-.jot-flip {
-  position: absolute;
-  inset: 0;
-  border-radius: 18rpx;
-  overflow: hidden;
-}
-
-.jot-page-next {
-  z-index: 1;
-  background: linear-gradient(180deg, #f7f9fc 0%, #eceff5 100%);
-  transform: translateZ(-10rpx) translateY(8rpx);
-  box-shadow: 0 16rpx 24rpx rgba(0, 0, 0, 0.11);
-}
-
-.jot-flip {
-  z-index: 3;
-  transform-origin: top center;
-  transform-style: preserve-3d;
-  will-change: transform;
-  box-shadow: 0 24rpx 36rpx rgba(0, 0, 0, 0.18), 0 8rpx 12rpx rgba(0, 0, 0, 0.12);
-}
-
-.jot-stage.is-transitioning .jot-flip {
-  transition: transform 760ms cubic-bezier(0.22, 0.92, 0.26, 1);
-}
-
-.jot-flip.is-commit {
-  animation: jot-paper-flip 760ms cubic-bezier(0.22, 0.92, 0.26, 1);
-}
-
-.jot-flip.is-rebound {
-  transition: transform 620ms cubic-bezier(0.16, 1.15, 0.25, 1);
-}
-
-@keyframes jot-paper-flip {
-  0% {
-    transform: rotateX(var(--flip-angle));
-  }
-  50% {
-    transform: rotateX(calc(var(--flip-angle) * 0.7 - 72deg)) skewY(3.8deg);
-  }
-  100% {
-    transform: rotateX(var(--target-angle));
-  }
-}
-
-.jot-half {
-  position: relative;
-  width: 100%;
-  overflow: hidden;
-  background: linear-gradient(180deg, #fbfcfd 0%, #f2f5f9 100%);
-}
-
-.jot-half--top {
-  height: 50%;
-  border-radius: 18rpx 18rpx 0 0;
-}
-
-.jot-half--bottom {
-  height: 50%;
-  border-radius: 0 0 18rpx 18rpx;
-  border-top: 1px solid rgba(125, 133, 146, 0.18);
-}
-
-.jot-fold-shell {
-  transform-origin: bottom center;
-  transform-style: preserve-3d;
-  will-change: transform;
-}
-
-.jot-half-face {
-  position: absolute;
-  inset: 0;
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
-}
-
-.jot-half-face.back {
-  transform: rotateX(180deg);
-  background: linear-gradient(180deg, #e7ebf1 0%, #dbe1ea 100%);
-}
-
-.jot-bg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0.14;
-}
-
-.jot-day {
-  position: absolute;
-  left: 50rpx;
-  top: 64rpx;
-  font-size: 168rpx;
+.jot-month-nav-icon {
+  font-size: 40rpx;
+  font-weight: 300;
+  color: rgba(60, 60, 67, 0.65);
   line-height: 1;
-  font-weight: 800;
-  color: #20252d;
-  letter-spacing: 2rpx;
 }
 
-.jot-day.mirror {
-  transform: rotateX(180deg);
-  opacity: 0.35;
+.jot-month-title {
+  font-size: 52rpx;
+  font-weight: 700;
+  letter-spacing: 1rpx;
+  color: #000000;
+  line-height: 1.1;
 }
 
-.jot-date {
-  display: block;
-  margin: 34rpx 52rpx 0;
+.jot-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+}
+
+.jot-year-btn {
+  width: 48rpx;
+  height: 48rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+}
+
+.jot-year-icon {
+  font-size: 26rpx;
+  color: rgba(60, 60, 67, 0.55);
+  line-height: 1;
+}
+
+.jot-year-label {
   font-size: 28rpx;
-  color: #687283;
+  font-weight: 600;
+  color: rgba(60, 60, 67, 0.85);
+  min-width: 72rpx;
+  text-align: center;
 }
 
-.jot-text {
+.jot-calendar {
+  padding: 8rpx 20rpx 24rpx;
+}
+
+.jot-week-row {
+  display: flex;
+  flex-direction: row;
+  margin-bottom: 8rpx;
+}
+
+.jot-week-cell {
+  flex: 1;
+  text-align: center;
+  font-size: 22rpx;
+  font-weight: 500;
+  color: rgba(60, 60, 67, 0.45);
+  line-height: 1.2;
+}
+
+.jot-day-grid {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+
+.jot-day-slot {
+  width: 14.2857%;
+  padding: 10rpx 0 14rpx;
+  box-sizing: border-box;
+}
+
+.jot-day-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8rpx;
+}
+
+.jot-day-num-wrap {
+  width: 64rpx;
+  height: 64rpx;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+}
+
+.jot-day-num-wrap.is-selected {
+  background: #ff3b30;
+}
+
+.jot-day-num {
+  font-size: 30rpx;
+  font-weight: 500;
+  color: #000000;
+  line-height: 1;
+}
+
+.jot-day-num.is-selected {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.jot-day-dot {
+  width: 8rpx;
+  height: 8rpx;
+  border-radius: 50%;
+  background: rgba(60, 60, 67, 0.35);
+}
+
+.jot-list-scroll {
+  flex: 1;
+  height: 0;
+  min-height: 200rpx;
+  padding: 0 24rpx;
+  box-sizing: border-box;
+}
+
+.jot-list-anim {
+  transform: translateZ(0);
+}
+
+.jot-card {
+  background: #ffffff;
+  border-radius: 24rpx;
+  padding: 28rpx 28rpx 32rpx;
+  margin-bottom: 20rpx;
+  border: 1rpx solid rgba(60, 60, 67, 0.08);
+  box-shadow: 0 4rpx 24rpx rgba(0, 0, 0, 0.04);
+}
+
+.jot-card--empty {
+  padding: 48rpx 28rpx;
+  align-items: center;
+}
+
+.jot-card-date {
   display: block;
-  margin: 18rpx 52rpx 0;
-  font-size: 34rpx;
-  line-height: 1.68;
-  color: #2c323d;
+  font-size: 24rpx;
+  font-weight: 500;
+  color: rgba(60, 60, 67, 0.5);
+  margin-bottom: 16rpx;
+}
+
+.jot-card-body {
+  display: block;
+  font-size: 32rpx;
+  line-height: 1.65;
+  color: #1c1c1e;
   white-space: pre-wrap;
 }
 
-.jot-summary {
-  position: absolute;
-  left: 52rpx;
-  right: 52rpx;
-  bottom: 34rpx;
-  height: 70rpx;
-  border-radius: 12rpx;
-  display: flex;
-  align-items: center;
-  padding-left: 20rpx;
-  box-sizing: border-box;
-  color: #f3f6fb;
-  font-size: 24rpx;
-  background: linear-gradient(90deg, rgba(34, 40, 52, 0.94), rgba(61, 70, 84, 0.94));
+.jot-empty-text {
+  display: block;
+  text-align: center;
+  font-size: 30rpx;
+  color: rgba(60, 60, 67, 0.45);
 }
 
-.jot-base {
-  margin: 22rpx auto 0;
-  width: 90%;
-  height: 88rpx;
-  border-radius: 20rpx;
-  background: linear-gradient(135deg, #6f5038 0%, #89674a 30%, #4e3828 100%);
-  box-shadow: inset 0 6rpx 10rpx rgba(255, 255, 255, 0.22), inset 0 -8rpx 14rpx rgba(0, 0, 0, 0.3),
-    0 16rpx 24rpx rgba(0, 0, 0, 0.24);
-  transform: translateZ(-22rpx) rotateX(66deg);
-  transform-origin: top;
+.jot-ai-sheet {
+  margin-top: 4rpx;
+  margin-bottom: 20rpx;
+  padding: 28rpx 28rpx 32rpx;
+  border-radius: 28rpx;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1rpx solid rgba(60, 60, 67, 0.1);
+  box-shadow: 0 8rpx 40rpx rgba(0, 0, 0, 0.08);
+}
+
+.jot-ai-title {
+  display: block;
+  font-size: 26rpx;
+  font-weight: 600;
+  color: rgba(60, 60, 67, 0.55);
+  margin-bottom: 12rpx;
+  letter-spacing: 0.5rpx;
+}
+
+.jot-ai-body {
+  display: block;
+  font-size: 30rpx;
+  line-height: 1.55;
+  color: #1c1c1e;
+}
+
+.jot-list-bottom-space {
+  height: 48rpx;
 }
 </style>
